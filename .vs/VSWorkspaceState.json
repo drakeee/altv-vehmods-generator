@@ -1,0 +1,11 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\src",
+    "\\vendors\\zlib",
+    "\\vendors\\zlib\\lib",
+    "\\vendors\\zstr\\src"
+  ],
+  "SelectedNode": "\\src\\main.cpp",
+  "PreviewInSolutionExplorer": false
+}
