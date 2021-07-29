@@ -24,3 +24,47 @@ void CUtil::PrintByteArray(std::byte* array, size_t length)
 		printf("\n");
 	}
 }
+
+#define CHUNK (128)
+void CUtil::DecompressBytes(std::vector<std::byte>& data, std::vector<std::byte>& dst)
+{
+	z_stream strm;
+
+	strm.zalloc = Z_NULL;
+	strm.zfree = Z_NULL;
+	strm.opaque = Z_NULL;
+	strm.next_in = Z_NULL;
+	strm.avail_in = 0;
+
+	int initRet = inflateInit2(&strm, -MAX_WBITS);
+	assert(initRet == Z_OK);
+
+	unsigned char buffer[CHUNK];
+
+	do
+	{
+		strm.avail_in = data.size();
+		strm.next_in = (unsigned char*)data.data();
+
+		do
+		{
+			std::memset(&buffer, 0, CHUNK);
+
+			strm.avail_out = CHUNK;
+			strm.next_out = &buffer[0];
+
+			initRet = inflate(&strm, Z_NO_FLUSH);
+
+			dst.insert(dst.end(), (std::byte*)&buffer, (std::byte*)&buffer + CHUNK);
+		} while (strm.avail_out == 0);
+	} while (initRet != Z_STREAM_END);
+
+	if (initRet < 0)
+	{
+		printf("Error %d in zlib uncompress\n", initRet);
+	}
+
+	dst.resize(strm.total_out);
+
+	(void)inflateReset(&strm);
+}

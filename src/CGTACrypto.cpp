@@ -2,7 +2,7 @@
 
 CGTACrypto::CGTACrypto()
 {
-
+    
 }
 
 void CGTACrypto::ReadNgKeys(std::vector<std::byte> &buffer, NG_KEY_VECTOR &output)
@@ -12,7 +12,7 @@ void CGTACrypto::ReadNgKeys(std::vector<std::byte> &buffer, NG_KEY_VECTOR &outpu
     for (int i = 0; i < 101; i++)
     {
         auto t = rd.ReadBytes(272);
-        output[i].assign(t.get(), t.get() + 272);
+        output[i].assign(t.data(), t.data() + 272);
     }
 }
 
@@ -43,17 +43,17 @@ void CGTACrypto::ReadNgLuts(std::vector<std::byte> &buffer, NG_ENCRYPT_LUTS_VECT
         {
             for (int k = 0; k < 256; k++)
             {
-                auto t = rd.ReadBytes(256).get();
+                auto t = rd.ReadBytes(256).data();
                 std::move(t, t + 256, output[i][j].LUT0[k]);
             }
 
             for (int k = 0; k < 256; k++)
             {
-                auto t = rd.ReadBytes(256).get();
+                auto t = rd.ReadBytes(256).data();
                 std::move(t, t + 256, output[i][j].LUT1[k]);
             }
 
-            auto t = rd.ReadBytes(65536).get();
+            auto t = rd.ReadBytes(65536).data();
             std::move(t, t + 256, output[i][j].Indices);
         }
     }
@@ -67,6 +67,11 @@ void CGTACrypto::GetNGKey(const char* name, uint32_t length, std::vector<std::by
     output.assign(GTA5Keys->NG_KEY[keyidx].data(), GTA5Keys->NG_KEY[keyidx].data() + 272);
 }
 
+void CGTACrypto::DecryptAES(std::vector<std::byte> &data, uint32_t length)
+{
+    aes_decrypt_ecb(AES_CYPHER_256, (uint8_t*)data.data(), data.size(), (uint8_t*)GTA5Keys->AES_KEY.data());
+}
+
 std::vector<std::byte> CGTACrypto::DecryptNG(std::vector<std::byte>& data, const char* name, uint32_t length)
 {
     std::vector<std::byte> key(272);
@@ -77,17 +82,17 @@ std::vector<std::byte> CGTACrypto::DecryptNG(std::vector<std::byte>& data, const
 std::vector<std::byte> CGTACrypto::DecryptNG(std::vector<std::byte>& data, std::vector<std::byte>& key)
 {
     std::vector<std::byte> decryptedData(data.size());
-    //auto decryptedData = new std::byte[data.size()];
 
-    uint32_t* keyuints = new uint32_t[key.size() / sizeof uint32_t];
-    CUtil::BlockCopy(key.data(), 0, keyuints, 0, key.size());
+    //uint32_t* keyuints = new uint32_t[key.size() / sizeof uint32_t];
+    //CUtil::BlockCopy(key.data(), 0, keyuints, 0, key.size());
 
     for (int blockIndex = 0; blockIndex < (data.size() / 16); blockIndex++)
     {
         std::vector<std::byte> encryptedBlock(16); // = new std::byte[16];
         CUtil::BlockCopy(data.data(), 16 * blockIndex, encryptedBlock.data(), 0, 16);
 
-        auto decryptedBlock = DecryptNGBlock(encryptedBlock, keyuints);
+        //auto decryptedBlock = DecryptNGBlock(encryptedBlock, keyuints);
+        auto decryptedBlock = DecryptNGBlock(encryptedBlock, (uint32_t*)key.data());
         CUtil::BlockCopy(decryptedBlock.data(), 0, decryptedData.data(), 16 * blockIndex, 16);
     }
 
@@ -96,6 +101,8 @@ std::vector<std::byte> CGTACrypto::DecryptNG(std::vector<std::byte>& data, std::
         auto left = data.size() % 16;
         CUtil::BlockCopy(data.data(), data.size() - left, decryptedData.data(), data.size() - left, left);
     }
+
+    //delete keyuints;
 
     return std::vector<std::byte>(decryptedData.data(), decryptedData.data() + data.size());
 }
@@ -150,7 +157,7 @@ std::vector<std::byte> CGTACrypto::DecryptNGRoundA(std::byte *data, uint32_t key
         table[15][(unsigned char)data[15]] ^
         key[3];
 
-    auto result = new std::byte[16];
+    std::byte result[16];
 
     CUtil::BlockCopy(CUtil::ToByte(x1).data(), 0, result, 0, 4);
     CUtil::BlockCopy(CUtil::ToByte(x2).data(), 0, result, 4, 4);
@@ -187,7 +194,7 @@ std::vector<std::byte> CGTACrypto::DecryptNGRoundB(std::byte *data, uint32_t key
         table[12][(uint32_t)data[12]] ^
         key[3];
 
-    auto result = new std::byte[16];
+    std::byte result[16];
     result[0] = (std::byte)((x1 >> 0) & 0xFF);
     result[1] = (std::byte)((x1 >> 8) & 0xFF);
     result[2] = (std::byte)((x1 >> 16) & 0xFF);

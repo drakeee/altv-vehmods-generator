@@ -3,6 +3,7 @@
 #include <Main.h>
 
 class CRpfEntry;
+class CRpfFileEntry;
 class CRpfBinaryFileEntry;
 class CRpfDirectoryEntry;
 
@@ -21,7 +22,7 @@ public:
 	struct RpfHeader
 	{
 		unsigned char version;
-		char magic[3];
+        char magic[4] = { 0 };
 		int entryCount;
 		int namesLength;
 		int encrypted;
@@ -29,17 +30,18 @@ public:
 #pragma pack(pop)
 
 	RpfHeader header;
-    CRpfFile* parent;
+    CRpfFile* parent = nullptr;
 
-	std::ifstream file;
+	std::ifstream *file;
 	std::string filePath;
-    std::string fileRelativePath = "";
 	std::string fileName;
+    std::string fileFullPath;
 	uint32_t fileSize;
+    uint32_t fileOffset = 0;
 
     std::vector<CRpfEntry*> allEntries;
+    std::vector<CRpfFile*> children;
     CRpfDirectoryEntry* root;
-    std::string path;
 
     uint32_t totalFileCount = 0;
     uint32_t totalFolderCount = 0;
@@ -48,8 +50,11 @@ public:
 
     bool isAESEncrypted = false;
     bool isNGEncrypted = false;
+    bool isFail = false;
 
 	CRpfFile(const char* filePath);
+    CRpfFile(CRpfFile* parent, CRpfBinaryFileEntry* entry);
+    ~CRpfFile();
 
     std::vector<std::byte> ExtractFileBinary(CRpfBinaryFileEntry* entry);
     void ExtractFileBinary(CRpfBinaryFileEntry* entry, std::string path);
@@ -75,34 +80,6 @@ public:
     {
         return GetTopParent()->filePath;
     }
-
-    //{
-    //    try
-    //    {
-    //        using (DeflateStream ds = new DeflateStream(new MemoryStream(bytes), CompressionMode.Decompress))
-    //        {
-    //            MemoryStream outstr = new MemoryStream();
-    //            ds.CopyTo(outstr);
-    //            byte[] deflated = outstr.GetBuffer();
-    //            byte[] outbuf = new byte[outstr.Length]; //need to copy to the right size buffer for output.
-    //            Array.Copy(deflated, outbuf, outbuf.Length);
-
-    //            if (outbuf.Length <= bytes.Length)
-    //            {
-    //                LastError = "Warning: Decompressed data was smaller than compressed data...";
-    //                //return null; //could still be OK for tiny things!
-    //            }
-
-    //            return outbuf;
-    //        }
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        LastError = "Could not decompress.";// ex.ToString();
-    //        LastException = ex;
-    //        return null;
-    //    }
-    //}
 
 private:
 	void ReadHeader(void);
@@ -130,6 +107,8 @@ public:
     uint32_t nameHash;
     uint32_t shortNameHash;
 
+    uint32_t fileUncompressedSize;
+
     uint32_t nameOffset;
     std::string name;
     std::string nameLower;
@@ -145,15 +124,34 @@ public:
     {
         CRpfEntry* pfile = this;
         while (pfile->parent != nullptr)
-        {
             pfile = (CRpfEntry*)pfile->parent;
-        }
+
         return pfile;
+    }
+
+    inline CRpfFile* GetTopParentFile()
+    {
+        CRpfFile* pfile = this->file;
+        while (pfile->parent != nullptr)
+            pfile = pfile->parent;
+
+        return pfile;
+
     }
 
     std::string GetPhysicalFilePath()
     {
         return GetTopParent()->path;
+    }
+
+    std::string GetRelativeFilePath(bool withBasePath = true)
+    {
+
+        std::string temp(this->path);
+        if (!withBasePath)
+            temp = temp.substr(this->GetTopParentFile()->filePath.length(), temp.length());
+
+        return temp.substr(0, temp.find_last_of("\\/")) + kPathSeparator;
     }
 
 
@@ -184,6 +182,7 @@ public:
 
         if (ident != 0x7FFFFF00u)
         {
+            printf("SHITHAHA!\n");
             throw ("Error in RPF7 directory entry.");
             return;
         }
@@ -214,8 +213,9 @@ public:
         this->entryType = CRpfEntry::Type::FILE_ENTRY;
     }
 
-    uint32_t fileOffset;
-    uint32_t fileSize;
+    uint32_t fileOffset = 0;
+    uint32_t fileOffsetPos = 0;
+    uint32_t fileSize = 0;
     bool isEncrypted;
 
     virtual long GetFileSize() { return 0; };
@@ -225,7 +225,7 @@ public:
 class CRpfBinaryFileEntry : public CRpfFileEntry
 {
 public:
-    uint32_t fileUncompressedSize;
+    /*uint32_t fileUncompressedSize;*/
     uint32_t encryptionType;
 
     void Read(ByteReader &reader) override
@@ -235,20 +235,35 @@ public:
         this->nameOffset = (uint32_t)buf & 0xFFFF;
         this->fileSize = (uint32_t)(buf >> 16) & 0xFFFFFF;
         this->fileOffset = (uint32_t)(buf >> 40) & 0xFFFFFF;
+        this->fileOffsetPos = (this->file->fileOffset + ((long)this->fileOffset * 512));
 
         this->fileUncompressedSize = reader.ReadInt<uint32_t>();
 
         this->encryptionType = reader.ReadInt<uint32_t>();
+
+        /*printf("nameOffset: %u\n", this->nameOffset);
+        printf("fileSize: %u\n", this->fileSize);
+        printf("fileOffset: %u\n", this->fileOffset);
+        printf("fileOffsetPos: %u\n", this->fileOffsetPos);
+        printf("fileUncompressedSize: %u\n", this->fileUncompressedSize);
+        printf("encryptionType: %x\n", this->encryptionType);*/
 
         switch (this->encryptionType)
         {
         case 0: this->isEncrypted = false; break;
         case 1: this->isEncrypted = true; break;
         default:
-            throw ("Error in RPF7 file entry.");
+            //this->file->isFail = true;
+            ////throw ("Error in RPF7 file entry.");
+            //return;
             break;
         }
 
+    }
+
+    std::vector<std::byte> ExtractFileBinary(void)
+    {
+        return this->file->ExtractFileBinary(this);
     }
 
     void ExtractFile(std::string path)
@@ -428,59 +443,23 @@ public:
         auto buf2 = reader.ReadBytes(3);
         this->fileOffset = ((uint32_t)buf2[0] + (uint32_t)(buf2[1] << 8) + (uint32_t)(buf2[2] << 16)) & 0x7FFFFF;
 
-        reader.ReadInt<uint32_t>();
-        reader.ReadInt<uint32_t>();
+        uint32_t SystemFlags = reader.ReadInt<uint32_t>();
+        uint32_t GraphicsFlags = reader.ReadInt<uint32_t>();
+
+        this->fileUncompressedSize = SystemFlags + GraphicsFlags;
 
         // there are sometimes resources with length=0xffffff which actually
         // means length>=0xffffff
         if (this->fileSize == 0xFFFFFF)
         {
-            //BinaryReader cfr = File.CurrentFileReader;
-            //long opos = cfr.BaseStream.Position;
-            //cfr.BaseStream.Position = File.StartPos + ((long)FileOffset * 512); //need to use the base offset!!
-            //auto buf = cfr.ReadBytes(16);
-            //FileSize = ((uint32_t)buf[7] << 0) | ((uint32_t)buf[14] << 8) | ((uint32_t)buf[5] << 16) | ((uint32_t)buf[2] << 24);
-            //cfr.BaseStream.Position = opos;
+            long opos = this->file->file->tellg();
+            this->file->file->seekg(this->file->fileOffset + ((long)this->fileOffset * 512));
+
+            std::byte buf[16];
+            this->file->file->read((char*)&buf, 16);
+            this->fileSize = ((uint32_t)buf[7] << 0) | ((uint32_t)buf[14] << 8) | ((uint32_t)buf[5] << 16) | ((uint32_t)buf[2] << 24);
+            this->file->file->seekg(opos);
         }
 
     }
-    
-    //void Write(DataWriter writer)
-    //{
-    //    writer.Write((ushort)NameOffset);
-
-    //    auto fs = FileSize;
-    //    if (fs > 0xFFFFFF) fs = 0xFFFFFF;//will also need to make sure the RSC header is updated...
-
-    //    auto buf1 = new byte[]{
-    //        (byte)((fs >> 0) & 0xFF),
-    //        (byte)((fs >> 8) & 0xFF),
-    //        (byte)((fs >> 16) & 0xFF)
-    //    };
-    //    writer.Write(buf1);
-
-    //    auto buf2 = new byte[]{
-    //        (byte)((FileOffset >> 0) & 0xFF),
-    //        (byte)((FileOffset >> 8) & 0xFF),
-    //        (byte)(((FileOffset >> 16) & 0xFF) | 0x80)
-    //    };
-    //    writer.Write(buf2);
-
-    //    writer.Write(SystemFlags);
-    //    writer.Write(GraphicsFlags);
-    //}
-
-    /*override string ToString()
-    {
-        return "Resource file: " + Path;
-    }*/
-
-    /*long GetFileSize() override
-    {
-        return (FileSize == 0) ? (long)(SystemSize + GraphicsSize) : FileSize;
-    }
-    override void SetFileSize(uint32_t s)
-    {
-        FileSize = s;
-    }*/
 };

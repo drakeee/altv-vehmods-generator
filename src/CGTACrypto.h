@@ -13,6 +13,8 @@ public:
 	static void ReadNgLuts(std::vector<std::byte> &buffer, NG_ENCRYPT_LUTS_VECTOR &output);
 
 	static void GetNGKey(const char* name, uint32_t length, std::vector<std::byte> &output);
+	static void DecryptAES(std::vector<std::byte> &data, uint32_t length);
+
     static std::vector<std::byte> DecryptNG(std::vector<std::byte>& data, const char* name, uint32_t length);
     static std::vector<std::byte> DecryptNG(std::vector<std::byte>& data, std::vector<std::byte>& key);
     static std::vector<std::byte> DecryptNGBlock(std::vector<std::byte> &data, uint32_t *key);

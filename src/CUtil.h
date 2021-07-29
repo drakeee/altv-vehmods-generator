@@ -14,6 +14,7 @@ struct ByteReader
 
 public:
 	std::byte* data;
+	uint32_t length = 0;
 	uint32_t byteRead = 0;
 
 public:
@@ -21,12 +22,13 @@ public:
 		data(data) { }
 
 	ByteReader(std::vector<std::byte> &data) :
-		data(std::move(data.data())) { }
+		data(std::move(data.data())), length(data.size()) { }
 
-	std::unique_ptr<std::byte[]> ReadBytes(uint32_t size)
+	std::vector<std::byte> ReadBytes(uint32_t size)
 	{
-		auto buffer = std::make_unique<std::byte[]>(size);
-		std::copy(this->data + this->byteRead, this->data + (this->byteRead + size), buffer.get());
+		//auto buffer = std::make_unique<std::byte[]>(size);
+		std::vector<std::byte> buffer(size);
+		std::copy(this->data + this->byteRead, this->data + (this->byteRead + size), buffer.data());
 
 		this->byteRead += size;
 
@@ -37,7 +39,7 @@ public:
 	inline T ReadInt()
 	{
 		T tempValue;
-		std::memcpy(&tempValue, ReadBytes(sizeof(T)).get(), sizeof(T));
+		std::memcpy(&tempValue, ReadBytes(sizeof(T)).data(), sizeof(T));
 
 		return tempValue;
 	}
@@ -168,6 +170,8 @@ public:
 		else
 			return false;
 	}
+
+	static void DecompressBytes(std::vector<std::byte>& data, std::vector<std::byte>& dst);
 
 	/*template<typename T>
 	inline static size_t ReadFile(const char* filePath, T** buffer)

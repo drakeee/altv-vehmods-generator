@@ -2,42 +2,92 @@
 
 CRpfFile::CRpfFile(const char* filePath)
 {
-	this->file.open(filePath, std::ios_base::binary | std::ios_base::in);
-	if (this->file.fail())
+	this->file = new std::ifstream(filePath, std::ios_base::binary | std::ios_base::in);
+	if (this->file->fail())
 	{
 		std::cerr << "Unable to open file for reading";
 		return;
 	}
 
-	this->filePath = filePath;
 	std::filesystem::path p(filePath);
+	this->filePath = p.parent_path().string();
 	this->fileName = p.filename().string();
+	this->fileFullPath = this->filePath + kPathSeparator + this->fileName;
 
-	this->file.seekg(0, std::ios_base::end);
-	this->fileSize = this->file.tellg();
-	this->file.seekg(0, std::ios_base::beg);
+	this->file->seekg(0, std::ios_base::end);
+	this->fileSize = this->file->tellg();
+	this->file->seekg(0, std::ios_base::beg);
 
 	this->ReadHeader();
 }
 
+CRpfFile::CRpfFile(CRpfFile* parent, CRpfBinaryFileEntry* entry)
+{
+	this->parent = parent;
+	this->filePath = entry->path;
+	this->fileName = entry->nameLower;
+	this->fileFullPath = entry->path;
+	this->file = this->parent->file;
+	this->fileOffset = entry->fileOffsetPos;
+	this->file->seekg(this->fileOffset, std::ios_base::beg);
+	this->fileSize = entry->GetFileSize();
+
+	/*printf("BufferPos: %u\n", entry->fileOffsetPos);
+	printf("Size1: %u\n", entry->fileSize);
+	printf("Size2: %u\n", entry->fileUncompressedSize);
+	printf("Size3: %u\n", entry->GetFileSize());
+	printf("Size4: %u\n", this->fileSize);*/
+
+	this->ReadHeader();
+}
+
+CRpfFile::~CRpfFile()
+{
+	for each (auto entry in this->allEntries)
+	{
+		delete entry;
+	}
+
+	for each (auto child in this->children)
+	{
+		delete child;
+	}
+}
+
 void CRpfFile::ReadHeader(void)
 {
-	if (!this->file.is_open())
+	if (!this->file->is_open())
 		return;
 
-	this->file.read((char*)&this->header.version, 1);
-	this->file.read((char*)&this->header.magic, 3);
-	this->file.read((char*)&this->header.entryCount, 4);
-	this->file.read((char*)&this->header.namesLength, 4);
+	//For some reason it is impossible to read this file from "update\update.rpf\dlc_patch\patchday1ng\x64\patch\data\lang\chinesesimp.rpf"
+	//so we might just skip it or not read it at all
+	//TODO: Fix it (?)
+
+	if (this->fileName == "chinesesimp.rpf")
+	{
+		return;
+	}
+
+	this->file->read((char*)&this->header.version, 1);
+	this->file->read((char*)&this->header.magic, 3);
+	std::reverse(this->header.magic, this->header.magic + 3);
+	this->file->read((char*)&this->header.entryCount, 4);
+	this->file->read((char*)&this->header.namesLength, 4);
+
+	/*printf("Version: %c\n", this->header.version);
+	printf("Magic: %s\n", this->header.magic);
+	printf("EntryCount: %d\n", this->header.entryCount);
+	printf("NamesLength: %d\n", this->header.namesLength);
+	printf("Path: %s\n", this->fileFullPath.c_str());*/
 
 	if (this->header.version >= '2')
-		this->file.read((char*)&this->header.encrypted, 4);
+		this->file->read((char*)&this->header.encrypted, 4);
 
-	std::vector<std::byte> entriesData((int)this->header.entryCount * 16);
-	std::vector<std::byte> namesData((int)this->header.namesLength);
+	std::vector<std::byte> entriesData((uint32_t)this->header.entryCount * 16);
+	std::vector<std::byte> namesData((uint32_t)this->header.namesLength);
 
-	this->file.read((char*)entriesData.data(), (int)this->header.entryCount * 16);
-	this->file.read((char*)namesData.data(), (int)this->header.namesLength);
+	this->file->read((char*)entriesData.data(), (uint32_t)this->header.entryCount * 16);
+	this->file->read((char*)namesData.data(), (uint32_t)this->header.namesLength);
 
 	switch (this->header.encrypted)
 	{
@@ -49,16 +99,27 @@ void CRpfFile::ReadHeader(void)
 		break;
 	case Encryption::AES:
 	{
-		std::cout << "AES encryption";
+		//std::cout << "AES encryption" << std::endl;
+
+		CGTACrypto::DecryptAES(entriesData, this->header.entryCount * 16);
+		CGTACrypto::DecryptAES(namesData, this->header.namesLength);
 		this->isAESEncrypted = true;
+
 		break;
 	}
 	case Encryption::NG:
 	{
 		//std::cout << "NG encryption" << std::endl;
+
+		//printf("Before decrypt: %s\n", this->fileName.c_str());
+		//CUtil::PrintByteArray(namesData);
+
 		entriesData = CGTACrypto::DecryptNG(entriesData, this->fileName.c_str(), this->fileSize);
 		namesData = CGTACrypto::DecryptNG(namesData, this->fileName.c_str(), this->fileSize);
 		this->isNGEncrypted = true;
+
+		//printf("After decrypt: ");
+		//CUtil::PrintByteArray(namesData);
 
 		break;
 	}
@@ -83,11 +144,14 @@ void CRpfFile::ReadHeader(void)
 		if (x == 0x7fffff00) //directory entry
 		{
 			e = new CRpfDirectoryEntry();
+			//printf("DIRECTORY!\n");
+
 			this->totalFolderCount++;
 		}
 		else if ((x & 0x80000000) == 0) //binary file entry
 		{
 			e = new CRpfBinaryFileEntry();
+			//printf("BINARY!\n");
 
 			this->totalBinaryFileCount++;
 			this->totalFileCount++;
@@ -95,6 +159,7 @@ void CRpfFile::ReadHeader(void)
 		else //assume resource file entry
 		{
 			e = new CRpfResourceFileEntry();
+			//printf("RESOURCE!\n");
 
 			this->totalResourceCount++;
 			this->totalFileCount++;
@@ -107,6 +172,7 @@ void CRpfFile::ReadHeader(void)
 		e->Read(entryReader);
 
 		namesReader.byteRead = e->nameOffset;
+
 		auto tempString = namesReader.ReadString();
 		e->name = tempString;
 		std::transform(tempString.begin(), tempString.end(), tempString.begin(), ::tolower);
@@ -124,7 +190,7 @@ void CRpfFile::ReadHeader(void)
 	}
 
 	this->root = (CRpfDirectoryEntry*)this->allEntries[0];
-	this->root->path = this->fileName + this->fileRelativePath;// + "\\" + Root.Name;
+	this->root->path = this->fileFullPath;// + "\\" + Root.Name;
 	auto stack = std::stack<CRpfDirectoryEntry*>();
 	stack.push(this->root);
 
@@ -138,29 +204,47 @@ void CRpfFile::ReadHeader(void)
 
 		for (int i = starti; i < endi; i++)
 		{
-			CRpfEntry *e = this->allEntries[i];
+			//printf("Size: %d - %d - %d - %d\n", this->allEntries.size(), i, item->entriesIndex, item->entriesCount);
+			CRpfEntry *e = this->allEntries.at(i);
+
+			if (e == nullptr)
+				break;
+
 			e->parent = item;
 
 			if (e->entryType == CRpfEntry::Type::DIRECTORY_ENTRY)
 			{
 				CRpfDirectoryEntry *rde = (CRpfDirectoryEntry*)e;
-				rde->path = item->path + "\\" + rde->nameLower;
+				//rde->path = item->path + "\\" + rde->nameLower;
 				item->directories.push_back(rde);
 				stack.push(rde);
 			}
 			else if (e->entryType == CRpfEntry::Type::FILE_ENTRY)
 			{
 				CRpfFileEntry *rfe = (CRpfFileEntry*)e;
-				rfe->path = item->path + "\\" + rfe->nameLower;
+				//rfe->path = item->path + "\\" + rfe->nameLower;
 				item->files.push_back(rfe);
 			}
+
+			e->path = item->path + "\\" + e->nameLower;
+		}
+	}
+
+	for each (auto & entry in this->allEntries)
+	{
+		if (CUtil::EndsWith(entry->nameLower, ".rpf") && entry->entryType == CRpfEntry::Type::FILE_ENTRY)
+		{
+			CRpfBinaryFileEntry* fileEntry = (CRpfBinaryFileEntry*)entry;
+			CRpfFile* file = new CRpfFile(this, fileEntry);
+
+			this->children.push_back(file);
 		}
 	}
 }
 
 std::vector<std::byte> CRpfFile::ExtractFileBinary(CRpfBinaryFileEntry* entry)
 {
-	this->file.seekg(0 + ((long)entry->fileOffset * 512), std::ios_base::beg);
+	this->file->seekg(entry->fileOffsetPos, std::ios_base::beg);
 
 	long l = entry->GetFileSize();
 
@@ -170,14 +254,12 @@ std::vector<std::byte> CRpfFile::ExtractFileBinary(CRpfBinaryFileEntry* entry)
 		uint32_t totlen = (uint32_t)l - offset;
 
 		std::vector<std::byte> tbytes(totlen);
-		this->file.read((char*)tbytes.data(), totlen);
+		this->file->read((char*)tbytes.data(), totlen);
 
 		if (entry->isEncrypted)
 		{
 			if (this->isAESEncrypted)
-			{
-				//decr = CGTACrypto::DecryptAES(tbytes);
-			}
+				CGTACrypto::DecryptAES(tbytes, entry->fileUncompressedSize);
 			else
 				tbytes = CGTACrypto::DecryptNG(tbytes, entry->name.c_str(), entry->fileUncompressedSize);
 		}
@@ -185,7 +267,7 @@ std::vector<std::byte> CRpfFile::ExtractFileBinary(CRpfBinaryFileEntry* entry)
 		if (entry->fileSize > 0)
 		{
 			printf("FILE IS COMPRESSED!\n");
-			return DecompressBytes(tbytes);
+			return this->DecompressBytes(tbytes);
 		}
 
 		return tbytes;
@@ -211,98 +293,35 @@ void CRpfFile::ExtractFileBinary(CRpfBinaryFileEntry* entry, std::string path)
 	f.close();
 }
 
-#define CHUNK (128)
-void decompressBytes(std::vector<std::byte> &data, std::vector<std::byte> &dst)
-{
-	z_stream strm;
-
-	strm.zalloc = Z_NULL;
-	strm.zfree = Z_NULL;
-	strm.opaque = Z_NULL;
-	strm.next_in = Z_NULL;
-	strm.avail_in = 0;
-
-	int initRet = inflateInit2(&strm, -MAX_WBITS);
-	assert(initRet == Z_OK);
-
-	unsigned char buffer[CHUNK];
-
-	do
-	{
-		strm.avail_in = data.size();
-		strm.next_in = (unsigned char*)data.data();
-
-		do
-		{
-			std::memset(&buffer, 0, CHUNK);
-
-			strm.avail_out = CHUNK;
-			strm.next_out = &buffer[0];
-
-			initRet = inflate(&strm, Z_NO_FLUSH);
-
-			dst.insert(dst.end(), (std::byte*)&buffer, (std::byte*)&buffer + CHUNK);
-		} while (strm.avail_out == 0);
-	} while (initRet != Z_STREAM_END);
-
-	if (initRet < 0)
-	{
-		printf("Error %d in zlib uncompress\n", initRet);
-	}
-
-	dst.resize(strm.total_out);
-
-	(void)inflateReset(&strm);
-}
-
 std::vector<std::byte> CRpfFile::DecompressBytes(std::vector<std::byte> bytes)
 {
-	Bytef* dest = new Bytef[bytes.size() * 10];
-	uLongf destLen;
-
 	std::vector<std::byte> def;
-	decompressBytes(bytes, def);
+	CUtil::DecompressBytes(bytes, def);
 
 	return def;
-	
-	/*try
-	{
-		using (DeflateStream ds = new DeflateStream(new MemoryStream(bytes), CompressionMode.Decompress))
-		{
-			MemoryStream outstr = new MemoryStream();
-			ds.CopyTo(outstr);
-			byte[] deflated = outstr.GetBuffer();
-			byte[] outbuf = new byte[outstr.Length]; //need to copy to the right size buffer for output.
-			Array.Copy(deflated, outbuf, outbuf.Length);
-
-			if (outbuf.Length <= bytes.Length)
-			{
-				LastError = "Warning: Decompressed data was smaller than compressed data...";
-				//return null; //could still be OK for tiny things!
-			}
-
-			return outbuf;
-		}
-	}
-	catch (Exception ex)
-	{
-		LastError = "Could not decompress.";// ex.ToString();
-		LastException = ex;
-		return null;
-	}*/
 }
 
 void CRpfFile::SearchFiles(std::string name, std::vector<CRpfEntry*>& filesOutput)
 {
+	for each (auto & child in this->children)
+	{
+		child->SearchFiles(name, filesOutput);
+	}
+
 	for each (auto & entry in this->allEntries)
 	{
-		if (entry->nameLower == name)
+		if (entry->nameLower.find(name) != std::string::npos)
 			filesOutput.push_back(entry);
 	}
 }
 
 void CRpfFile::SearchFilesEndsWith(std::string endsWith, std::vector<CRpfEntry*>& filesOutput)
 {
+	for each (auto & child in this->children)
+	{
+		child->SearchFiles(endsWith, filesOutput);
+	}
+
 	for each (auto & entry in this->allEntries)
 	{
 		if (CUtil::EndsWith(entry->nameLower, endsWith))
