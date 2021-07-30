@@ -78,8 +78,11 @@ def search_modkit(input: list, key: str, value: any):
 
     return -1
 
+def normalize_tags(root: ET.Element):
+    root.tag = root.tag.capitalize()
+    for child in root:
+        normalize_tags(child)
 
-lockKit = {}
 def parseCarcol(filePath: str, output: list):
     tree = ET.parse(filePath)
     root = tree.getroot()
@@ -135,6 +138,7 @@ def parseCarcol(filePath: str, output: list):
 def parseDlcList(filePath: str):
     tree = ET.parse(filePath)
     root = tree.getroot()
+    normalize_tags(root)
 
     tempList = list()
 
@@ -196,6 +200,7 @@ progress("Extracted "+colorama.Fore.LIGHTBLUE_EX + str(len(vehMods))+colorama.Fo
 progress("Generating vehmods.bin")
 generateBin(vehMods)
 
-with open("./vehmods.json", "w+") as output:
+#pprint.PrettyPrinter(indent=4).pprint(vehMods)
+with open("./vehmods_drake.json", "w+") as output:
     output.write(json.dumps(vehMods, indent=4))
     output.close()
