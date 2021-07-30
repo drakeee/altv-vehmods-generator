@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import collections
 import os
 import colorama
+import struct
 
 p = subprocess.Popen("demo.exe", shell=False)
 p.communicate()
@@ -145,6 +146,29 @@ def parseDlcList(filePath: str):
 
     return tempList
 
+def generateBin(vehMods: dict):
+    with open('vehmods.bin', 'wb') as outfile:
+
+        outfile.write(struct.pack('<2c', *[char.encode("UTF-8") for char in "MO"]))
+        outfile.write(struct.pack('<H', 1))
+
+        for modkit in vehMods:
+            outfile.write(struct.pack('<H', modkit["Id"]))
+            outfile.write(struct.pack('<H', len(modkit["Name"])))
+            outfile.write(struct.pack(f'<{len(modkit["Name"])}c', *[char.encode("UTF-8") for char in modkit["Name"]]))
+            outfile.write(struct.pack('<B', len(modkit["Mods"].keys())))
+
+            for modKey in modkit["Mods"]:
+                mod = modkit["Mods"][modKey]
+
+                outfile.write(struct.pack('<B', int(modKey)))
+                outfile.write(struct.pack('<B', len(mod)))
+
+                for modID in mod:
+                    outfile.write(struct.pack('<H', int(modID)))
+
+        outfile.close()
+
 
 vehMods = []
 
@@ -169,6 +193,9 @@ vehMods = sorted(vehMods, key=lambda k: k['Id'])
 
 progress("Extracted "+colorama.Fore.LIGHTBLUE_EX + str(len(vehMods))+colorama.Fore.WHITE+" vehicle mods")
 
-with open("./vehmods_drake.json", "w+") as output:
+progress("Generating vehmods.bin")
+generateBin(vehMods)
+
+with open("./vehmods.json", "w+") as output:
     output.write(json.dumps(vehMods, indent=4))
     output.close()
